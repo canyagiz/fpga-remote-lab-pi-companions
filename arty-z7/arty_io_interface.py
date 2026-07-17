@@ -112,6 +112,15 @@ def send_image_uart(raw_pixels):
     termios.tcdrain(_uart_fd)
     time.sleep(0.12)  # Wait for FPGA to receive all 784 bytes (784*10bits/125000 = 62.7ms)
 
+def send_image_index(index):
+    # ROM-based image loading: send a single byte (0-9) selecting a preset
+    # image already baked into the FPGA's own ROM, instead of streaming
+    # 784 raw pixel bytes over UART.
+    assert 0 <= index <= 9
+    os.write(_uart_fd, bytes([index]))
+    termios.tcdrain(_uart_fd)
+    time.sleep(0.001)
+
 def decode_png_to_pixels(png_bytes):
     if not PIL_AVAILABLE:
         raise RuntimeError("Pillow not installed on RPi")
@@ -153,6 +162,15 @@ def control_board(command, conn):
 
     elif cmd == 'led_read':
         conn.sendall(read_leds().encode())
+        return
+
+    elif cmd == 'pick_img':
+        idx_byte = conn.recv(1)
+        if not idx_byte or idx_byte[0] > 9:
+            conn.sendall(b'err_idx ')
+            return
+        send_image_index(idx_byte[0])
+        conn.sendall(b'ok_index')
         return
 
     elif cmd == 'send_img':
