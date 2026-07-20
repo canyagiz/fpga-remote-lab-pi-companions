@@ -1,0 +1,21 @@
+[Unit]
+Description=Cyclone IV Remote Lab TCP Server
+# graphical.target, not just network.target: this creates a virtual
+# keyboard (evdev UInput) that Wayland/labwc must recognize as an input
+# device to route its key events to feh. Starting before the compositor
+# is up meant the compositor never picked up the device - key presses
+# reached this service (which echoed the command back over TCP as
+# "successful") but never reached feh, so img_next/img_home silently did
+# nothing. Confirmed by restarting this service after graphical.target
+# was already up, which fixed it immediately.
+After=network.target graphical.target
+Wants=graphical.target
+
+[Service]
+ExecStart=/usr/bin/python3 /home/pi/io_interface.py
+Restart=always
+RestartSec=3
+User=root
+
+[Install]
+WantedBy=graphical.target

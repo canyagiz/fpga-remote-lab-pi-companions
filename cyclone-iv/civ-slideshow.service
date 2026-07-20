@@ -1,0 +1,33 @@
+[Unit]
+Description=Cyclone IV Slideshow (feh) for FPGA HDMI Input
+After=graphical.target civ-lab.service
+Requires=graphical.target
+
+[Service]
+User=pi
+Environment=DISPLAY=:0
+# Fixed window size (not --auto-zoom) to match the Magewell capture
+# resolution the portal expects.
+#
+# IMPORTANT: pass ONLY the directory here, never the file *and* the
+# directory together. The original command passed Testbild_FH.png as its
+# own argument before the directory (to force it first in gallery order,
+# matching the portal's input_image_array ordering in lab.js) - but
+# since that same file also lives inside the directory, feh listed it
+# TWICE without deduplicating. Positions 1 and 2 in the gallery both
+# pointed at the same file, so one img_next click landed on the
+# duplicate (no visible change) and looked like "next" was silently
+# eaten - confirmed via `xdotool getactivewindow getwindowname`, which
+# showed feh's own counter advancing (1 of 13 -> 2 of 13) while the
+# displayed filename stayed on Testbild_FH.png both times.
+#
+# Fixed by renaming the file to 0_Testbild_FH.png so it sorts first
+# alphabetically on its own, and passing only the directory - each
+# position in feh's gallery is now a distinct file, matching lab.js's
+# array 1:1 with no duplicate slot.
+ExecStart=/usr/bin/feh -Y -F -g 1280x1024 /home/pi/Desktop/pics/
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=graphical.target
