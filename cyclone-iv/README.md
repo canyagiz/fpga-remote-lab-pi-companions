@@ -63,7 +63,44 @@ swapped, never the file itself:
   TCP commands are (same `press_key` calls), so they work identically
   whether driven remotely or in person.
 
-## Deployment
+## Setup from scratch
+
+### 1. OS image and first boot
+
+Flash **Raspberry Pi OS (Desktop image, not Lite)** - Trixie (Debian 13)
+is what this was built/tested against. Using Raspberry Pi Imager's
+"Edit Settings" (gear icon) before writing, set:
+
+- Hostname, and enable SSH (password or key auth).
+- **Enable auto-login to the desktop as user `pi`.** This is not
+  optional: `civ-slideshow.service` depends on a real graphical session
+  already being up (`graphical.target` alone isn't enough - a login
+  screen sitting idle also satisfies that target without anyone ever
+  being logged in). Without auto-login, feh and the virtual keyboard
+  have no desktop session to attach to and the whole HDMI output chain
+  stays dark. Imager's own auto-login option is sufficient; no manual
+  `raspi-config` step needed if set there. Confirm afterwards with
+  `systemctl get-default` (should say `graphical.target`) and checking
+  `/etc/lightdm/lightdm.conf` for `autologin-user=pi`.
+
+This Pi's desktop session is `labwc` (a Wayland compositor) - that's
+Raspberry Pi OS Trixie's default, nothing extra to select.
+
+### 2. Install packages
+
+`python3-gpiozero` and `python3-lgpio` normally ship pre-installed on
+the Desktop image; `feh` and `python3-evdev` do not and need installing
+explicitly:
+
+```bash
+sudo apt update
+sudo apt install feh python3-evdev python3-gpiozero python3-lgpio python3-pil
+```
+
+(`python3-pil` is needed by `make_custom_placeholder.py` below, not by
+`io_interface.py` itself.)
+
+### 3. Deploy the companion script + services
 
 Two systemd units, both `WantedBy=graphical.target`:
 
@@ -82,9 +119,35 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now civ-lab.service civ-slideshow.service
 ```
 
-The gallery directory needs the actual test images placed by hand
-(`0_Testbild_FH.png`, `a_stripes0.bmp`, `b_stripes1.bmp`,
-`c_stripes2.bmp`, `street_0.bmp` .. `street_7.bmp`, plus the
-`zz_custom.jpg` placeholder seeded from a copy of `custom_neutral.jpg`)
-- they're not included in this repo since they're just static demo
-  content, not part of the companion script itself.
+### 4. Gallery images
+
+The gallery directory (`/home/pi/Desktop/pics/`) needs:
+
+- The actual demo test images - `0_Testbild_FH.png`, `a_stripes0.bmp`,
+  `b_stripes1.bmp`, `c_stripes2.bmp`, `street_0.bmp` .. `street_7.bmp`.
+  These are static lab content (not generated, not part of the
+  companion script) and aren't included in this repo - source them from
+  wherever the lab's existing image set lives (e.g. copy from another
+  already-running Cyclone IV Pi, or from the portal's own copy under
+  `FPGA_Vision_Remote_Lab_experiment/Experiment_files/images/` in the
+  `fpga-remote-lab` hardware repo).
+- `zz_custom.jpg`, seeded as a copy of `custom_neutral.jpg` (see below) -
+  this is the custom-upload slot, and unlike the images above it must
+  sort alphabetically **last** in this directory (hence the `zz_`
+  prefix) - see [Custom image upload](#custom-image-upload-img_upldimg_copy)
+  above for why.
+
+`custom_neutral.jpg` itself (referenced by `NEUTRAL_PATH` in
+`io_interface.py`) is generated, not a static asset - run
+[`make_custom_placeholder.py`](make_custom_placeholder.py) on the Pi to
+create it, then seed the gallery slot from it:
+
+```bash
+python3 make_custom_placeholder.py   # writes /home/pi/custom_neutral.jpg
+cp /home/pi/custom_neutral.jpg /home/pi/Desktop/pics/zz_custom.jpg
+```
+
+Re-run the script (and re-copy) any time you want to change what the
+placeholder looks like - `io_interface.py`'s `img_copy` handler always
+copies fresh from `custom_neutral.jpg`, so that file is the source of
+truth, not the gallery copy.
