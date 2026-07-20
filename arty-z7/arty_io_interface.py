@@ -60,12 +60,32 @@ def _open_uart(dev, baud):
     fd = os.open(dev, os.O_RDWR | os.O_NOCTTY)
     buf = bytearray(44)
     fcntl.ioctl(fd, _TCGETS2, buf)
+    iflag = struct.unpack_from('<I', buf, 0)[0]
+    oflag = struct.unpack_from('<I', buf, 4)[0]
     cflag = struct.unpack_from('<I', buf, 8)[0]
+    lflag = struct.unpack_from('<I', buf, 12)[0]
+
+    # Full raw mode. Without this, Linux's tty defaults (OPOST|ONLCR etc.)
+    # silently rewrite certain bytes on the wire -- confirmed via the
+    # chunked-transfer debug log: every failure occurred on exactly a pixel
+    # value of 10 (0x0A / LF), with ONLCR expanding it into two bytes
+    # (0x0D 0x0A), desyncing the FPGA's byte count by +1 every time it
+    # occurred. This was very likely also a root contributor to the original
+    # (pre-chunked) 784-byte burst transfer's reliability problems.
+    iflag &= ~(termios.IGNBRK | termios.BRKINT | termios.PARMRK | termios.ISTRIP |
+               termios.INLCR | termios.IGNCR | termios.ICRNL | termios.IXON)
+    oflag &= ~termios.OPOST
+    lflag &= ~(termios.ECHO | termios.ECHONL | termios.ICANON | termios.ISIG | termios.IEXTEN)
+
     cflag = (cflag & ~_CBAUD) | _BOTHER
     cflag |= termios.CS8 | termios.CREAD | termios.CLOCAL
     cflag &= ~termios.PARENB
     cflag &= ~termios.CSTOPB
+
+    struct.pack_into('<I', buf,  0, iflag)
+    struct.pack_into('<I', buf,  4, oflag)
     struct.pack_into('<I', buf,  8, cflag)
+    struct.pack_into('<I', buf, 12, lflag)
     struct.pack_into('<I', buf, 36, baud)   # c_ispeed
     struct.pack_into('<I', buf, 40, baud)   # c_ospeed
     fcntl.ioctl(fd, _TCSETS2, bytes(buf))
@@ -112,6 +132,64 @@ def send_image_uart(raw_pixels):
     termios.tcdrain(_uart_fd)
     time.sleep(0.12)  # Wait for FPGA to receive all 784 bytes (784*10bits/125000 = 62.7ms)
 
+def send_image_index(index):
+    # ROM-based image loading: send a single byte (0-9) selecting a preset
+    # image already baked into the FPGA's own ROM, instead of streaming
+    # 784 raw pixel bytes over UART.
+    assert 0 <= index <= 9
+    os.write(_uart_fd, bytes([index]))
+    termios.tcdrain(_uart_fd)
+    time.sleep(0.001)
+
+def read_led_raw_int():
+    """Read the 6 LED GPIO pins as a single integer (bit5=LD5 ... bit0=LD0)."""
+    ld0 = lgpio.gpio_read(h, PIN_LD0)
+    ld1 = lgpio.gpio_read(h, PIN_LD1)
+    ld2 = lgpio.gpio_read(h, PIN_LD2)
+    ld3 = lgpio.gpio_read(h, PIN_LD3)
+    ld4 = lgpio.gpio_read(h, PIN_LD4)
+    ld5 = lgpio.gpio_read(h, PIN_LD5)
+    return (ld5 << 5) | (ld4 << 4) | (ld3 << 3) | (ld2 << 2) | (ld1 << 1) | ld0
+
+def send_image_chunked(raw_pixels, max_retries=5):
+    """Send a 784-byte image one pixel at a time. After each byte, verify
+    the FPGA's pixel counter (exposed on LD0-5, mod 64) actually advanced
+    as expected before sending the next byte; retry (resend the same byte)
+    on mismatch. Replaces the old single-burst 784-byte UART transfer,
+    which proved unreliable for long continuous streams."""
+    assert len(raw_pixels) == IMAGE_SIZE  # 784
+
+    # Pulse reset to zero the FPGA's pixel counter before starting
+    set_pin(PIN_BTN0, 1)
+    time.sleep(0.01)
+    set_pin(PIN_BTN0, 0)
+    time.sleep(0.01)
+
+    for expected_idx in range(IMAGE_SIZE):
+        target_byte = raw_pixels[expected_idx]
+        # RTL special-cases the final pixel: instead of naturally continuing
+        # to (IMAGE_SIZE % 64), it wraps pixel_idx straight to 0 (and sets
+        # image_ready) to avoid writing past fmap0's declared bounds. Match
+        # that special case here, or the last byte's ACK check always fails.
+        if expected_idx == IMAGE_SIZE - 1:
+            expected_after = 0
+        else:
+            expected_after = (expected_idx + 1) % 64
+        for attempt in range(max_retries):
+            os.write(_uart_fd, bytes([target_byte]))
+            termios.tcdrain(_uart_fd)
+            time.sleep(0.005)
+            actual = read_led_raw_int() & 0x3F
+            print("DEBUG pixel={} attempt={} target_byte={} expected={} actual={}".format(
+                expected_idx, attempt, target_byte, expected_after, actual))
+            if actual == expected_after:
+                break
+        else:
+            raise RuntimeError(
+                "pixel {} gonderilemedi ({} deneme sonrasi)".format(expected_idx, max_retries))
+
+    return True
+
 def decode_png_to_pixels(png_bytes):
     if not PIL_AVAILABLE:
         raise RuntimeError("Pillow not installed on RPi")
@@ -153,6 +231,43 @@ def control_board(command, conn):
 
     elif cmd == 'led_read':
         conn.sendall(read_leds().encode())
+        return
+
+    elif cmd == 'chunkimg':
+        size_data = b''
+        while len(size_data) < 4:
+            chunk = conn.recv(4 - len(size_data))
+            if not chunk:
+                break
+            size_data += chunk
+        img_size = struct.unpack('>I', size_data)[0]
+        img_data = b''
+        while len(img_data) < img_size:
+            chunk = conn.recv(min(4096, img_size - len(img_data)))
+            if not chunk:
+                break
+            img_data += chunk
+
+        with open(DRAWN_IMAGE_PATH, 'wb') as f:
+            f.write(img_data)
+        reload_feh()
+
+        try:
+            raw_pixels = decode_png_to_pixels(img_data)
+            send_image_chunked(raw_pixels)
+            conn.sendall(b'ok_chnk ')
+        except Exception as ex:
+            print("Chunked UART send error: {}".format(ex))
+            conn.sendall(b'err_chnk')
+        return
+
+    elif cmd == 'pick_img':
+        idx_byte = conn.recv(1)
+        if not idx_byte or idx_byte[0] > 9:
+            conn.sendall(b'err_idx ')
+            return
+        send_image_index(idx_byte[0])
+        conn.sendall(b'ok_index')
         return
 
     elif cmd == 'send_img':
