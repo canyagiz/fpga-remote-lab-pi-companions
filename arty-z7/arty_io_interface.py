@@ -177,11 +177,15 @@ def send_image_chunked(raw_pixels, max_retries=5):
             expected_after = (expected_idx + 1) % 64
         for attempt in range(max_retries):
             os.write(_uart_fd, bytes([target_byte]))
-            termios.tcdrain(_uart_fd)
-            time.sleep(0.005)
+            # No tcdrain() here: measured at ~8ms/call on the RPi 5's RP1
+            # UART driver (unrelated to actual transfer time, which is
+            # ~80us for one byte at 125000 baud) -- was the entire
+            # bottleneck of the chunked transfer (784 x 8ms = ~6.3s).
+            # The 1ms sleep below already leaves more than enough margin
+            # for the byte to clear the FIFO before the next write, so it
+            # doubles as the drain wait.
+            time.sleep(0.001)
             actual = read_led_raw_int() & 0x3F
-            print("DEBUG pixel={} attempt={} target_byte={} expected={} actual={}".format(
-                expected_idx, attempt, target_byte, expected_after, actual))
             if actual == expected_after:
                 break
         else:
