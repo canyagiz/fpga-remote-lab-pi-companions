@@ -63,6 +63,43 @@ swapped, never the file itself:
   TCP commands are (same `press_key` calls), so they work identically
   whether driven remotely or in person.
 
+### HDMI output resolution (must be forced to 1280x720)
+
+The Magewell capture card's EDID (the capability block an HDMI sink
+sends the source, listing supported modes and its preferred one)
+advertises 1920x1080 as preferred. With nothing overriding that, labwc
+(the Wayland compositor this Pi runs) negotiates 1080p on every login -
+even though the gallery images are all authored at 1280x720.
+
+That mismatch is exactly what produced the "black frame / 3-way
+tiled" corruption seen on Experiment 2 (sharpening) and Experiment 3
+(lane detection): the Cyclone IV bitstream's image-processing IPs use
+a fixed-width line buffer sized for 1280 columns. Fed a 1920-wide
+signal, the buffer wraps early relative to the real scanline every
+~1280 columns (1920/1280 = 1.5, matching the observed tiling).
+Experiment 1 (inverting) has no line buffer, so it looked unaffected
+and gave no hint the output resolution was wrong. `v4l2-ctl` on the
+portal side showed nothing abnormal either, since the Magewell was
+correctly capturing whatever the FPGA sent it - the fault was upstream
+of the capture card, not in it.
+
+**Forcing the kernel's `video=` cmdline parameter does not work** -
+tried first, and confirmed (by rebooting and re-checking `wlr-randr`)
+that labwc re-negotiates 1080p from EDID at compositor startup
+regardless of what `cmdline.txt` says. The fix that actually persists
+across reboots is a labwc autostart script -
+[`labwc-autostart`](labwc-autostart) - which runs after the compositor
+is already up and forces the mode explicitly:
+
+```bash
+sudo cp labwc-autostart /home/pi/.config/labwc/autostart
+sudo chmod +x /home/pi/.config/labwc/autostart
+```
+
+Verify with `WAYLAND_DISPLAY=wayland-0 XDG_RUNTIME_DIR=/run/user/1000
+wlr-randr` - the `1280x720` line should be marked `(current)`, not
+`1920x1080`.
+
 ## Setup from scratch
 
 ### 1. OS image and first boot
@@ -117,6 +154,17 @@ sudo cp io_interface.py /home/pi/io_interface.py
 sudo cp civ-lab.service civ-slideshow.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now civ-lab.service civ-slideshow.service
+```
+
+Also deploy [`labwc-autostart`](labwc-autostart) (see [HDMI output
+resolution](#hdmi-output-resolution-must-be-forced-to-1280x720) above) -
+without it the board's video-processing experiments will show
+corrupted output:
+
+```bash
+mkdir -p /home/pi/.config/labwc
+cp labwc-autostart /home/pi/.config/labwc/autostart
+chmod +x /home/pi/.config/labwc/autostart
 ```
 
 ### 4. Gallery images

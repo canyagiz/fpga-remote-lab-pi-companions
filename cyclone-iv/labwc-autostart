@@ -1,0 +1,24 @@
+#!/bin/sh
+# Forces the HDMI output to 1280x720@60 on every login.
+#
+# Why this is needed: the Magewell capture card's EDID advertises
+# 1920x1080 as its preferred mode, and labwc negotiates its own output
+# mode from EDID at startup - it ignores a `video=` kernel cmdline
+# override (tried first, confirmed ineffective across a reboot: labwc
+# re-picks "preferred" every time regardless of what cmdline.txt says).
+# Setting the mode from inside autostart, after the compositor is
+# already up, is what actually sticks.
+#
+# The Cyclone IV bitstream's image-processing IPs (sharpening, lane
+# detection) use a fixed line-buffer width sized for 1280 columns. Feed
+# them a 1920-wide signal instead and every ~1280 columns the buffer's
+# internal position wraps early relative to the real scanline - visible
+# as a black frame or a 3-way tiled/repeated image on those experiments
+# (1920/1280 = 1.5, matching the observed tiling). Experiment 1
+# (inverting) has no line buffer, so it looked fine at either
+# resolution and gave no hint the output was wrong.
+#
+# Deploy to ~/.config/labwc/autostart on the Pi (chmod +x). See
+# README.md's "HDMI output resolution" section.
+sleep 2
+wlr-randr --output HDMI-A-1 --mode 1280x720@60
