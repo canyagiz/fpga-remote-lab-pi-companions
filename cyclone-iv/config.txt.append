@@ -1,0 +1,20 @@
+# Cyclone IV Pi: keep the DRM HDMI connector marked "connected" even
+# when the live hotplug-detect signal is briefly unclear right after a
+# power cycle - see cyclone-iv/README.md's "second failure mode"
+# section for the full explanation. Without this, labwc can fall back
+# to a synthetic 1920x1080-only headless output on some boots, which
+# breaks Experiment 2 (Sharpening) and Experiment 3 (Lane Detection).
+#
+# Safe to append to /boot/firmware/config.txt - [all] sections in this
+# file merge across repeated occurrences, they don't overwrite one
+# another:
+#
+#   cat config.txt.append | sudo tee -a /boot/firmware/config.txt
+#
+# Reboot to apply, then verify with:
+#   cat /sys/class/drm/card0-HDMI-A-1/status         # should say "connected"
+#   WAYLAND_DISPLAY=wayland-0 XDG_RUNTIME_DIR=/run/user/1000 wlr-randr
+#     # HDMI-A-1 should list real EDID modes, with 1280x720 marked (current)
+
+[all]
+hdmi_force_hotplug=1

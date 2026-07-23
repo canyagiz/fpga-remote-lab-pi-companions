@@ -120,10 +120,11 @@ race between the Pi coming up and the FPGA's HDMI receiver being ready
 to respond can leave the connector marked disconnected for that boot,
 even though the exact same cabling worked fine on the previous boot.
 
-Fix: add to `/boot/firmware/config.txt` under `[all]`:
+Fix: append [`config.txt.append`](config.txt.append) to
+`/boot/firmware/config.txt`:
 
-```
-hdmi_force_hotplug=1
+```bash
+cat config.txt.append | sudo tee -a /boot/firmware/config.txt
 ```
 
 This tells the VideoCore firmware to treat the port as connected
@@ -201,11 +202,15 @@ cp labwc-autostart /home/pi/.config/labwc/autostart
 chmod +x /home/pi/.config/labwc/autostart
 ```
 
-Add `hdmi_force_hotplug=1` under `[all]` in
+Append [`config.txt.append`](config.txt.append) to
 `/boot/firmware/config.txt` at the same time (see [second failure
 mode](#second-failure-mode-connector-reported-as-disconnected) above) -
 doing this at imaging time avoids ever hitting the disconnected-on-boot
-race in the field.
+race in the field:
+
+```bash
+cat config.txt.append | sudo tee -a /boot/firmware/config.txt
+```
 
 ### 4. Gallery images
 
