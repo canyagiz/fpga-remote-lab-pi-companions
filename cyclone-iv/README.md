@@ -100,6 +100,40 @@ Verify with `WAYLAND_DISPLAY=wayland-0 XDG_RUNTIME_DIR=/run/user/1000
 wlr-randr` - the `1280x720` line should be marked `(current)`, not
 `1920x1080`.
 
+#### Second failure mode: connector reported as disconnected
+
+The autostart script above only works if the kernel's DRM connector
+(`/sys/class/drm/card0-HDMI-A-1/status`) says `connected` in the first
+place - a mode forced onto a connector the kernel believes is
+disconnected is refused outright, logged in `dmesg` as:
+
+```
+[drm] User-defined mode not supported: "1280x720": 60 74250 1280 1390 1430 1650 720 725 730 750 0x60 0x5
+```
+
+When that happens, `wlr-randr` shows no `HDMI-A-1` output at all - only
+a synthetic headless fallback (`NOOP-1`, 1920x1080 only) - so the
+autostart script's `--output HDMI-A-1` target silently matches nothing.
+
+Seen in practice after a power cycle of the Pi: a hotplug-detection
+race between the Pi coming up and the FPGA's HDMI receiver being ready
+to respond can leave the connector marked disconnected for that boot,
+even though the exact same cabling worked fine on the previous boot.
+
+Fix: add to `/boot/firmware/config.txt` under `[all]`:
+
+```
+hdmi_force_hotplug=1
+```
+
+This tells the VideoCore firmware to treat the port as connected
+regardless of the live hotplug-detect signal, so EDID is read and the
+forced mode is accepted every boot instead of depending on the timing
+of that race. Reboot to apply, then verify both
+`/sys/class/drm/card0-HDMI-A-1/status` (`connected`) and `wlr-randr`
+(`1280x720 (current)`, real EDID modes listed instead of the
+`NOOP-1` fallback).
+
 ## Setup from scratch
 
 ### 1. OS image and first boot
@@ -166,6 +200,12 @@ mkdir -p /home/pi/.config/labwc
 cp labwc-autostart /home/pi/.config/labwc/autostart
 chmod +x /home/pi/.config/labwc/autostart
 ```
+
+Add `hdmi_force_hotplug=1` under `[all]` in
+`/boot/firmware/config.txt` at the same time (see [second failure
+mode](#second-failure-mode-connector-reported-as-disconnected) above) -
+doing this at imaging time avoids ever hitting the disconnected-on-boot
+race in the field.
 
 ### 4. Gallery images
 
