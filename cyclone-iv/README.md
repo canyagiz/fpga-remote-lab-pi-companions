@@ -100,6 +100,23 @@ Verify with `WAYLAND_DISPLAY=wayland-0 XDG_RUNTIME_DIR=/run/user/1000
 wlr-randr` - the `1280x720` line should be marked `(current)`, not
 `1920x1080`.
 
+**As of 2026-07-24, the script no longer just retries-then-gives-up -
+it self-heals for the whole session.** Confirmed in the field: labwc
+had been running for over a day with the connector reading
+`connected` the entire time (so *not* the disconnected race below),
+yet the session was still stuck at 1920x1080 - the output had
+evidently only become available *after* the old script's fixed ~2
+minute retry window had already elapsed that boot, so nothing was
+left watching once it did. There's also no reason the mode can only
+drift once, at boot: anything that makes the Magewell's EDID get
+re-read mid-session (a USB reset on the capture card, etc.) would
+silently flip the Pi back to 1080p with no supervisor watching for
+the rest of that session. The script now backgrounds an indefinite
+loop (guarded by `flock` against a duplicate if autostart ever runs
+twice without a fresh boot) that checks the current mode every 5s and
+re-forces it the instant it drifts - at boot or at any point during
+the session, not just in a bounded window right after login.
+
 #### Second failure mode: connector reported as disconnected
 
 The autostart script above only works if the kernel's DRM connector

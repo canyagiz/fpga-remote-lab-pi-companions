@@ -1,5 +1,6 @@
 #!/bin/sh
-# Forces the HDMI output to 1280x720@60 on every login.
+# Forces the HDMI output to 1280x720@60, and keeps enforcing it for the
+# entire session - not just once at login.
 #
 # Why this is needed: the Magewell capture card's EDID advertises
 # 1920x1080 as its preferred mode, and labwc negotiates its own output
@@ -16,26 +17,44 @@
 # as a black frame or a 3-way tiled/repeated image on those experiments
 # (1920/1280 = 1.5, matching the observed tiling). Experiment 1
 # (inverting) has no line buffer, so it looked fine at either
-# resolution and gave no hint the output was wrong.
+# resolution and gave no hint the output was wrong - and on a stuck
+# 1080p session, the extra 640x360 the picture doesn't cover shows the
+# Pi's own desktop background instead of the experiment.
 #
 # Deploy to ~/.config/labwc/autostart on the Pi (chmod +x). See
 # README.md's "HDMI output resolution" section.
 #
-# Retries instead of firing once: a single attempt can lose a race
-# against the desktop session still settling right after boot (seen in
-# practice with civ-slideshow.service restart-looping for over a
-# minute on one boot) - wlr-randr run against an output that isn't
-# fully up yet just silently no-ops, and labwc then keeps its
-# EDID-preferred 1920x1080 for the whole session with nothing left to
-# correct it. Checking the actual result and retrying for a couple of
-# minutes closes that gap; it exits as soon as the mode has taken.
-sleep 2
-i=0
-while [ "$i" -lt 40 ]; do
-	wlr-randr --output HDMI-A-1 --mode 1280x720@60 2>/dev/null
-	if wlr-randr 2>/dev/null | grep -q '1280x720 px, 60.000000 Hz (current)'; then
-		exit 0
-	fi
-	i=$((i + 1))
-	sleep 3
-done
+# A bounded retry-then-give-up loop (this script's previous version)
+# is not enough. Confirmed in the field 2026-07-24: labwc had been
+# running for over a day, the connector read "connected" the whole
+# time (so this was NOT the separate disconnected-on-boot race - see
+# README's "second failure mode" and config.txt.append), yet the
+# session was still stuck at 1920x1080. The output evidently only
+# became available *after* the fixed retry window (a couple of
+# minutes) had already elapsed that boot, so the old script had
+# already exited by the time there was anything to correct - and
+# nothing was left watching afterwards. There's also no reason the
+# mode can only drift once, at boot: anything that makes the
+# Magewell's EDID get re-read mid-session (a USB reset on the capture
+# card, its own driver reload, etc.) would silently flip the Pi back
+# to 1920x1080 with no supervisor watching for the rest of that
+# session.
+#
+# So this now runs for the whole graphical session instead of a fixed
+# window: poll the current mode, and the instant it isn't 1280x720,
+# force it back. Idle cost is one `wlr-randr` call every 5s -
+# negligible - and it self-heals any future recurrence of this same
+# bug, at boot or mid-session, without needing a fresh login to
+# re-trigger it. flock guards against two copies stacking up if
+# autostart ever runs twice without a fresh boot (e.g. a compositor
+# restart) - the second one exits immediately instead of adding a
+# redundant loop.
+(
+	flock -n 9 || exit 0
+	while true; do
+		if ! wlr-randr 2>/dev/null | grep -q '1280x720 px, 60.000000 Hz (current)'; then
+			wlr-randr --output HDMI-A-1 --mode 1280x720@60 2>/dev/null
+		fi
+		sleep 5
+	done
+) 9>/tmp/hdmi-force-720p.lock &
